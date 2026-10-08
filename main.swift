@@ -5,6 +5,11 @@ struct SavedColour: Codable, Equatable {
     var hex: String { String(format: "#%02x%02x%02x", r, g, b) }
     var rgb: String { "rgb(\(r), \(g), \(b))" }
     var color: Color { Color(red: Double(r)/255, green: Double(g)/255, blue: Double(b)/255) }
+
+    // Perceived brightness, so overlaid text can pick a readable colour.
+    var isLight: Bool {
+        (Double(r) * 299 + Double(g) * 587 + Double(b) * 114) / 1000 > 140
+    }
 }
 
 class ColourStore: ObservableObject {
@@ -183,10 +188,20 @@ struct ContentView: View {
                             lineWidth: store.selected == c ? 2.5 : 1.5)
             )
             .aspectRatio(1, contentMode: .fit)
+            .overlay(alignment: .bottomLeading) {
+                swatchNumber(index, colour: c.isLight ? .black : .white)
+            }
             .overlay(alignment: .topTrailing) {
                 SwatchDeleteButton { store.remove(at: index) }
             }
             .onTapGesture { store.selected = c }
+    }
+
+    func swatchNumber(_ index: Int, colour: Color) -> some View {
+        Text("\(index + 1)")
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .foregroundColor(colour.opacity(0.7))
+            .padding(5)
     }
 
     func emptySwatch(at index: Int) -> some View {
@@ -197,6 +212,9 @@ struct ContentView: View {
                     .stroke(Color.primary.opacity(0.15), lineWidth: 1.5)
             )
             .aspectRatio(1, contentMode: .fit)
+            .overlay(alignment: .bottomLeading) {
+                swatchNumber(index, colour: .primary)
+            }
             .onTapGesture { store.pickColour(at: index) }
     }
 
