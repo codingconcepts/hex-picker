@@ -1,0 +1,43 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stamp version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Info.plist
+
+      - name: Build dmg
+        run: make dmg DMG="build/HexPicker-$VERSION.dmg"
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "build/HexPicker-$VERSION.dmg" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --notes-file - <<'NOTES'
+          The app is ad-hoc signed, not notarised, so macOS will refuse to open it on first launch.
+
+          Right-click the app and choose Open, or clear the quarantine flag:
+
+          ```
+          xattr -dr com.apple.quarantine "/Applications/Hex Picker.app"
+          ```
+          NOTES
