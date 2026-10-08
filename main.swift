@@ -10,6 +10,11 @@ struct SavedColour: Codable, Equatable {
     var isLight: Bool {
         (Double(r) * 299 + Double(g) * 587 + Double(b) * 114) / 1000 > 140
     }
+
+    static func blend(_ a: SavedColour, _ b: SavedColour, _ t: Double) -> SavedColour {
+        func mix(_ x: Int, _ y: Int) -> Int { Int((Double(x) + (Double(y) - Double(x)) * t).rounded()) }
+        return SavedColour(r: mix(a.r, b.r), g: mix(a.g, b.g), b: mix(a.b, b.b))
+    }
 }
 
 class ColourStore: ObservableObject {
@@ -48,6 +53,32 @@ class ColourStore: ObservableObject {
                 self.save()
             }
         }
+    }
+
+    // Gaps bounded by a colour on both sides, as (start, end) slot indices.
+    private var gaps: [(Int, Int)] {
+        var result: [(Int, Int)] = []
+        var previous: Int?
+        for i in slots.indices where slots[i] != nil {
+            if let start = previous, i - start > 1 { result.append((start, i)) }
+            previous = i
+        }
+        return result
+    }
+
+    var canFill: Bool { !gaps.isEmpty }
+
+    // Blends each interior gap across its two neighbouring colours. Gaps before
+    // the first colour or after the last have nothing to blend, so stay empty.
+    func fill() {
+        for (start, end) in gaps {
+            guard let from = slots[start], let to = slots[end] else { continue }
+            let steps = end - start
+            for offset in 1..<steps {
+                slots[start + offset] = SavedColour.blend(from, to, Double(offset) / Double(steps))
+            }
+        }
+        save()
     }
 
     func remove(at index: Int) {
@@ -223,7 +254,7 @@ struct ContentView: View {
     }
 }
 
-class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemValidation {
     var panel: NSPanel!
     var swatchSizeMenu: NSMenu?
     let store = ColourStore()
@@ -288,6 +319,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         appMenu.addItem(sizeMenuItem)
         swatchSizeMenu = sizeMenu
 
+        let fillItem = NSMenuItem(title: "Fill", action: #selector(fillGaps), keyEquivalent: "f")
+        fillItem.target = self
+        appMenu.addItem(fillItem)
+
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         appMenu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -308,6 +343,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard let self = self, let hosting = self.panel.contentView else { return }
             self.panel.setContentSize(hosting.fittingSize)
         }
+    }
+
+    @objc func fillGaps() {
+        store.fill()
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        item.action == #selector(fillGaps) ? store.canFill : true
     }
 
     @objc func pickColour() {
