@@ -8,11 +8,26 @@ struct SavedColour: Codable, Equatable {
 }
 
 class ColourStore: ObservableObject {
-    static let maxColours = 6
-    @Published var slots: [SavedColour?] = Array(repeating: nil, count: 6)
+    static let sizeOptions = [4, 6, 8, 10, 12]
+    static let defaultSize = 6
+    @Published var slots: [SavedColour?] = Array(repeating: nil, count: ColourStore.defaultSize)
     @Published var selected: SavedColour?
 
+    var slotCount: Int { slots.count }
+
     init() { load() }
+
+    // Growing pads with empty slots, shrinking drops the trailing colours.
+    func setSlotCount(_ count: Int) {
+        guard count != slots.count else { return }
+        if count > slots.count {
+            slots.append(contentsOf: Array(repeating: nil, count: count - slots.count))
+        } else {
+            slots.removeLast(slots.count - count)
+            if let s = selected, !slots.contains(s) { selected = nil }
+        }
+        save()
+    }
 
     func pickColour(at index: Int) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
@@ -51,7 +66,9 @@ class ColourStore: ObservableObject {
         if let data = UserDefaults.standard.data(forKey: "savedColours"),
            let decoded = try? JSONDecoder().decode([SavedColour?].self, from: data) {
             slots = decoded
-            while slots.count < Self.maxColours { slots.append(nil) }
+        }
+        if !Self.sizeOptions.contains(slots.count) {
+            setSlotCount(Self.sizeOptions.first { $0 >= slots.count } ?? Self.sizeOptions.last!)
         }
     }
 }
@@ -122,12 +139,16 @@ struct CopyButton: View {
 
 struct ContentView: View {
     @ObservedObject var store: ColourStore
-    let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 3)
+
+    // Always two rows, so the swatches shrink as the count grows.
+    var columns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 12), count: store.slotCount / 2)
+    }
 
     var body: some View {
         VStack(spacing: 14) {
             LazyVGrid(columns: columns, spacing: 12) {
-                ForEach(0..<ColourStore.maxColours, id: \.self) { i in
+                ForEach(Array(0..<store.slotCount), id: \.self) { i in
                     if let c = store.slots[i] {
                         colourSwatch(c, at: i)
                     } else {
@@ -184,8 +205,9 @@ struct ContentView: View {
     }
 }
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var panel: NSPanel!
+    var swatchSizeMenu: NSMenu?
     let store = ColourStore()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -196,7 +218,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         panel = NSPanel(
             contentRect: hosting.frame,
-            styleMask: [.titled, .closable],
+            styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
@@ -210,14 +232,46 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = false
         panel.isReleasedWhenClosed = false
+        panel.delegate = self
         panel.center()
         panel.makeKeyAndOrderFront(nil)
+
+        // Miniaturizing drops the panel back to the normal level; put it back
+        // when it returns so it keeps floating over other apps and spaces.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(restoreFloating),
+            name: NSWindow.didDeminiaturizeNotification,
+            object: panel
+        )
+    }
+
+    @objc func restoreFloating() {
+        panel.level = .floating
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.orderFrontRegardless()
     }
 
     func setupMenu() {
         let mainMenu = NSMenu()
 
         let appMenu = NSMenu()
+
+        let sizeMenu = NSMenu()
+        for size in ColourStore.sizeOptions {
+            let item = NSMenuItem(title: "\(size)", action: #selector(setSwatchSize(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = size
+            item.state = size == store.slotCount ? .on : .off
+            sizeMenu.addItem(item)
+        }
+        let sizeMenuItem = NSMenuItem(title: "Swatch Size", action: nil, keyEquivalent: "")
+        sizeMenuItem.submenu = sizeMenu
+        appMenu.addItem(sizeMenuItem)
+        swatchSizeMenu = sizeMenu
+
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         appMenu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
         let appMenuItem = NSMenuItem()
@@ -227,23 +281,53 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = mainMenu
     }
 
+    @objc func setSwatchSize(_ sender: NSMenuItem) {
+        store.setSlotCount(sender.tag)
+        swatchSizeMenu?.items.forEach { $0.state = $0.tag == sender.tag ? .on : .off }
+
+        // The grid relayouts on the next pass, so resize the panel to fit after it.
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, let hosting = self.panel.contentView else { return }
+            self.panel.setContentSize(hosting.fittingSize)
+        }
+    }
+
     @objc func pickColour() {
         let index = store.slots.firstIndex(where: { $0 == nil }) ?? 0
         store.pickColour(at: index)
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
+        guard !panel.isMiniaturized else { return }
+        restoreFloating()
         panel.makeKeyAndOrderFront(nil)
     }
 
+    func applicationDidResignActive(_ notification: Notification) {
+        guard !panel.isMiniaturized else { return }
+        panel.level = .floating
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        panel.makeKeyAndOrderFront(nil)
+        if panel.isMiniaturized {
+            panel.deminiaturize(nil)
+        } else {
+            panel.makeKeyAndOrderFront(nil)
+        }
         NSApp.activate(ignoringOtherApps: true)
         return false
     }
 
+    // AppKit doesn't count panels as windows, so leaving the automatic
+    // "terminate after last window closed" behaviour on quits the app every
+    // time a menu closes. Quit on an explicit close of the panel instead.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        true
+        false
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        NSApp.terminate(nil)
+        return false
     }
 }
 

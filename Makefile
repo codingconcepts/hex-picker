@@ -2,6 +2,7 @@ APP_NAME := Hex Picker
 BUNDLE := build/$(APP_NAME).app
 DMG := build/HexPicker.dmg
 INSTALL_DIR := /Applications
+LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
 .PHONY: build sign dmg install reinstall uninstall run clean
 
@@ -24,20 +25,21 @@ dmg: sign
 
 install: sign
 	@echo "Installing to $(INSTALL_DIR)..."
+	-pkill -f "hex_picker" 2>/dev/null; sleep 0.5
+	rm -rf "$(INSTALL_DIR)/$(APP_NAME).app"
 	cp -R "$(BUNDLE)" "$(INSTALL_DIR)/"
+	@./uninstall.sh --keep-installed
 	@echo "Installed."
 
 uninstall:
-	@echo "Uninstalling..."
-	-pkill -f "hex_picker" 2>/dev/null; sleep 0.5
-	rm -rf "$(INSTALL_DIR)/$(APP_NAME).app"
-	@echo "Done."
+	./uninstall.sh
 
 reinstall: sign
 	@echo "Reinstalling..."
 	-pkill -f "hex_picker" 2>/dev/null; sleep 0.5
 	rm -rf "$(INSTALL_DIR)/$(APP_NAME).app"
 	cp -R "$(BUNDLE)" "$(INSTALL_DIR)/"
+	@./uninstall.sh --keep-installed
 	open "$(INSTALL_DIR)/$(APP_NAME).app"
 	@echo "Done."
 
@@ -46,4 +48,6 @@ run: sign
 	open "$(BUNDLE)"
 
 clean:
+	-@[ -d "$(BUNDLE)" ] && "$(LSREGISTER)" -u "$(CURDIR)/$(BUNDLE)" 2>/dev/null || true
+	-@[ -d "build/dmg_staging/$(APP_NAME).app" ] && "$(LSREGISTER)" -u "$(CURDIR)/build/dmg_staging/$(APP_NAME).app" 2>/dev/null || true
 	rm -rf build

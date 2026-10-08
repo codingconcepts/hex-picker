@@ -10,7 +10,7 @@ xcuserdata/
 timeline.xctimeline
 playground.xcworkspace
 
-.build/
+build/
 
 Carthage/Build/
 
